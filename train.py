@@ -23,14 +23,29 @@ from utils.dice_score import dice_loss
 # dir_mask = Path('./data/masks/')
 # dir_checkpoint = Path('./checkpoints/')
 
-dir_img = "data/VOCdevkit/VOC2012/JPEGImages"
-dir_mask = "data/VOCdevkit/VOC2012/SegmentationClass"
+
+dir_img = Path("data/VOCdevkit/VOC2012/JPEGImages")
+dir_mask = Path("data/VOCdevkit/VOC2012/SegmentationClass")
+# print("Images:", len(list(dir_img.glob("*.jpg"))))
+# print("Masks :", len(list(dir_mask.glob("*.png"))))
 dir_checkpoint = Path('./checkpoints/')
 
+# 找到有 mask 的图片
+img_ids = [p.stem for p in dir_img.glob("*.jpg") if (dir_mask / (p.stem + ".png")).exists()]
+print("Images with masks:", len(img_ids))  # 应该是 2913
+
+# 初始化 dataset
+dataset = CarvanaDataset(
+    images_dir=dir_img,
+    mask_dir=dir_mask,
+    scale=1,
+)
+dataset.ids = img_ids  # 只保留有 mask 的
 
 def train_model(
         model,
         device,
+        dataset,
         epochs: int = 5,
         batch_size: int = 1,
         learning_rate: float = 1e-5,
@@ -43,10 +58,10 @@ def train_model(
         gradient_clipping: float = 1.0,
 ):
     # 1. Create dataset
-    try:
-        dataset = CarvanaDataset(dir_img, dir_mask, img_scale)
-    except (AssertionError, RuntimeError, IndexError):
-        dataset = BasicDataset(dir_img, dir_mask, img_scale)
+    # try:
+    #     dataset = CarvanaDataset(dir_img, dir_mask, img_scale)
+    # except (AssertionError, RuntimeError, IndexError):
+    #     dataset = BasicDataset(dir_img, dir_mask, img_scale)
 
     # 2. Split into train / validation partitions
     n_val = int(len(dataset) * val_percent)
