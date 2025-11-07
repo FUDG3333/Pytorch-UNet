@@ -119,7 +119,7 @@ def train_model(
         if save_checkpoint:
             Path('./checkpoints/').mkdir(parents=True, exist_ok=True)
             state_dict = model.state_dict()
-            state_dict['mask_values'] = dataset.mask_values
+            # state_dict['mask_values'] = dataset.mask_values
             torch.save(state_dict, f'./checkpoints/checkpoint_epoch{epoch}.pth')
             logging.info(f'Checkpoint {epoch} saved!')
 
