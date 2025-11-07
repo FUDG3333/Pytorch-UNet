@@ -13,6 +13,47 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 
 
+# VOC 颜色表，映射类别 0~20
+VOC_COLORMAP = [
+    (0, 0, 0),       # 0: background
+    (128, 0, 0),     # 1: aeroplane
+    (0, 128, 0),     # 2: bicycle
+    (128, 128, 0),   # 3: bird
+    (0, 0, 128),     # 4: boat
+    (128, 0, 128),   # 5: bottle
+    (0, 128, 128),   # 6: bus
+    (128, 128, 128), # 7: car
+    (64, 0, 0),      # 8: cat
+    (192, 0, 0),     # 9: chair
+    (64, 128, 0),    # 10: cow
+    (192, 128, 0),   # 11: diningtable
+    (64, 0, 128),    # 12: dog
+    (192, 0, 128),   # 13: horse
+    (64, 128, 128),  # 14: motorbike
+    (192, 128, 128), # 15: person
+    (0, 64, 0),      # 16: potted plant
+    (128, 64, 0),    # 17: sheep
+    (0, 192, 0),     # 18: sofa
+    (128, 192, 0),   # 19: train
+    (0, 64, 128)     # 20: tv/monitor
+]
+
+# 建立颜色 -> 类别索引映射
+COLOR2CLASS = {color: idx for idx, color in enumerate(VOC_COLORMAP)}
+
+def rgb_to_class(mask):
+    """把 RGB mask 转成类别索引 mask"""
+    mask = np.array(mask)
+    h, w, _ = mask.shape
+    label = np.zeros((h, w), dtype=np.int64)
+    for color, idx in COLOR2CLASS.items():
+        equality = (mask == color).all(axis=2)
+        label[equality] = idx
+    return label
+
+
+
+
 def load_image(filename):
     ext = splitext(filename)[1]
     if ext == '.npy':
@@ -112,8 +153,53 @@ class BasicDataset(Dataset):
         }
 
 
-class CarvanaDataset(BasicDataset):
-    def __init__(self, images_dir, mask_dir, scale=1):
-        # super().__init__(images_dir, mask_dir, scale, mask_suffix='_mask')
-        super().__init__(images_dir, mask_dir, scale, mask_suffix='')
+# class CarvanaDataset(BasicDataset):
+#     def __init__(self, images_dir, mask_dir, scale=1):
+#         # super().__init__(images_dir, mask_dir, scale, mask_suffix='_mask')
+#         super().__init__(images_dir, mask_dir, scale, mask_suffix='')
+
+
+class CarvanaDataset(Dataset):
+    def __init__(self, images_dir, mask_dir, scale=1.0, ids=None):
+        self.images_dir = Path(images_dir)
+        self.mask_dir = Path(mask_dir)
+        self.scale = scale
+
+        # 获取所有图像文件
+        if ids is None:
+            self.ids = [p.stem for p in self.images_dir.glob("*.jpg") if (self.mask_dir / (p.stem + ".png")).exists()]
+        else:
+            self.ids = ids
+
+        if len(self.ids) == 0:
+            raise RuntimeError(f"No images found in {images_dir} with masks in {mask_dir}")
+
+    def __len__(self):
+        return len(self.ids)
+
+    def __getitem__(self, idx):
+        image_id = self.ids[idx]
+
+        # 加载 image
+        img_path = self.images_dir / (image_id + ".jpg")
+        image = Image.open(img_path).convert("RGB")
+        if self.scale != 1:
+            w, h = image.size
+            image = image.resize((int(w * self.scale), int(h * self.scale)))
+
+        # 加载 mask
+        mask_path = self.mask_dir / (image_id + ".png")
+        mask = Image.open(mask_path).convert("RGB")  # VOC 是彩色图
+        if self.scale != 1:
+            w, h = mask.size
+            mask = mask.resize((int(w * self.scale), int(h * self.scale)), resample=Image.NEAREST)
+
+        # 彩色 mask -> 类别索引
+        mask = rgb_to_class(mask)
+
+        # 转成 tensor
+        image = torch.from_numpy(np.array(image).transpose((2, 0, 1))).float() / 255.0
+        mask = torch.from_numpy(mask).long()
+
+        return {"image": image, "mask": mask}
 
