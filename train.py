@@ -19,8 +19,12 @@ from unet import UNet
 from utils.data_loading import BasicDataset, CarvanaDataset
 from utils.dice_score import dice_loss
 
-dir_img = Path('./data/imgs/')
-dir_mask = Path('./data/masks/')
+# dir_img = Path('./data/imgs/')
+# dir_mask = Path('./data/masks/')
+# dir_checkpoint = Path('./checkpoints/')
+
+dir_img = "data/VOCdevkit/VOC2012/JPEGImages"
+dir_mask = "data/VOCdevkit/VOC2012/SegmentationClass"
 dir_checkpoint = Path('./checkpoints/')
 
 
@@ -179,7 +183,9 @@ def get_args():
                         help='Percent of the data that is used as validation (0-100)')
     parser.add_argument('--amp', action='store_true', default=False, help='Use mixed precision')
     parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
-    parser.add_argument('--classes', '-c', type=int, default=2, help='Number of classes')
+    # parser.add_argument('--classes', '-c', type=int, default=2, help='Number of classes')
+    parser.add_argument('--classes', '-c', type=int, default=21, help='Number of classes')
+
 
     return parser.parse_args()
 
