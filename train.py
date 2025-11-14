@@ -20,15 +20,15 @@ def train_model(
         model,
         device,
         dataset,
-        epochs: int = 5,
+        epochs: int = 10,
         batch_size: int = 1,
-        learning_rate: float = 1e-5,
+        learning_rate: float = 1e-6,
         val_percent: float = 0.1,
         save_checkpoint: bool = True,
         img_scale: float = 0.5,
         amp: bool = False,
-        weight_decay: float = 1e-8,
-        momentum: float = 0.999,
+        weight_decay: float = 1e-5,
+        momentum: float = 0.9,
         gradient_clipping: float = 1.0,
 ):
     # Split into train / validation
@@ -62,13 +62,31 @@ def train_model(
     ''')
 
     # Optimizer, scheduler, criterion
-    optimizer = optim.RMSprop(model.parameters(),
-                              lr=learning_rate, weight_decay=weight_decay, momentum=momentum, foreach=True)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=5)
+    optimizer = optim.AdamW(model.parameters(),
+                          lr=learning_rate, 
+                          weight_decay=weight_decay)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, 
+        mode='max',
+        factor=0.5,    # 每次将学习率降低一半
+        patience=3     # 3个epoch没有改善就降低学习率
+    )
     grad_scaler = torch.cuda.amp.GradScaler(enabled=amp)
-    criterion = nn.CrossEntropyLoss() if model.n_classes > 1 else nn.BCEWithLogitsLoss()
-    global_step = 0
 
+    # ✅ 加入类别权重
+    weights = torch.tensor([
+        0.03, 3.2, 7.6, 2.7, 4.1, 3.4, 1.3, 1.6, 0.9, 2.3,
+        2.3, 1.8, 1.2, 2.3, 2.0, 0.4, 4.0, 2.8, 1.6, 1.4, 2.8
+    ], dtype=torch.float32)
+
+
+    # criterion = nn.CrossEntropyLoss() if model.n_classes > 1 else nn.BCEWithLogitsLoss()
+    criterion = nn.CrossEntropyLoss(weight=weights.to(device), ignore_index=255)
+
+    # criterion = nn.CrossEntropyLoss(ignore_index=255) if model.n_classes > 1 else nn.BCEWithLogitsLoss()
+    global_step = 0
+    best_val_score = 0
+    
     for epoch in range(1, epochs + 1):
         model.train()
         epoch_loss = 0
@@ -116,25 +134,51 @@ def train_model(
                     scheduler.step(val_score)
                     logging.info(f'Validation Dice score: {val_score}')
 
+        # 在每个 epoch 结束时评估
+        val_score = evaluate(model, val_loader, device, amp)
+        scheduler.step(val_score)
+        logging.info(f'Validation Dice score: {val_score}')
+        
+        # 保存最佳模型
+        if val_score > best_val_score:
+            best_val_score = val_score
+            torch.save(model.state_dict(), './checkpoints/best_model.pth')
+            logging.info(f'New best model saved! (Validation Dice: {val_score:.4f})')
+
+        # if save_checkpoint:
+        #     Path('./checkpoints/').mkdir(parents=True, exist_ok=True)
+        #     state_dict = model.state_dict()
+        #     # state_dict['mask_values'] = dataset.mask_values
+        #     torch.save(state_dict, f'./checkpoints/checkpoint_epoch{epoch}.pth')
+        #     logging.info(f'Checkpoint {epoch} saved!')
         if save_checkpoint:
             Path('./checkpoints/').mkdir(parents=True, exist_ok=True)
-            state_dict = model.state_dict()
-            # state_dict['mask_values'] = dataset.mask_values
-            torch.save(state_dict, f'./checkpoints/checkpoint_epoch{epoch}.pth')
+            checkpoint = {
+                "epoch": epoch,
+                "model_state": model.state_dict(),
+                "optimizer_state": optimizer.state_dict(),
+                "scheduler_state": scheduler.state_dict(),
+            }
+            torch.save(checkpoint, f'./checkpoints/checkpoint_epoch{epoch}.pth')
             logging.info(f'Checkpoint {epoch} saved!')
+
 
 
 def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks')
-    parser.add_argument('--epochs', '-e', type=int, default=5)
+    parser.add_argument('--epochs', '-e', type=int, default=10)
     parser.add_argument('--batch-size', '-b', dest='batch_size', type=int, default=1)
-    parser.add_argument('--learning-rate', '-l', dest='lr', type=float, default=1e-5)
+    parser.add_argument('--learning-rate', '-l', dest='lr', type=float, default=1e-6)
     parser.add_argument('--load', '-f', type=str, default=False)
     parser.add_argument('--scale', '-s', type=float, default=0.5)
     parser.add_argument('--validation', '-v', dest='val', type=float, default=10.0)
     parser.add_argument('--amp', action='store_true', default=False)
     parser.add_argument('--bilinear', action='store_true', default=False)
     parser.add_argument('--classes', '-c', type=int, default=21)
+    parser.add_argument('--weight-decay', type=float, default=1e-5, 
+                      help='Weight decay for optimizer')
+    parser.add_argument('--momentum', type=float, default=0.9,
+                      help='Momentum for optimizer')
     return parser.parse_args()
 
 
@@ -164,11 +208,25 @@ if __name__ == '__main__':
     model = model.to(device=device, memory_format=torch.channels_last)
     logging.info(f'Network:\n\t{model.n_channels} input channels\n\t{model.n_classes} output channels (classes)\n\t{"Bilinear" if model.bilinear else "Transposed conv"} upscaling')
 
+    # if args.load:
+    #     state_dict = torch.load(args.load, map_location=device)
+    #     # 安全地移除 mask_values（如果存在）
+    #     state_dict.pop('mask_values', None)  # 使用 pop 方法的安全移除
+    #     model.load_state_dict(state_dict)
+    #     logging.info(f'Model loaded from {args.load}')
+    start_epoch = 1  # 默认从1开始
+
     if args.load:
-        state_dict = torch.load(args.load, map_location=device)
-        del state_dict['mask_values']
-        model.load_state_dict(state_dict)
-        logging.info(f'Model loaded from {args.load}')
+        checkpoint = torch.load(args.load, map_location=device)
+        model.load_state_dict(checkpoint["model_state"])
+        optimizer.load_state_dict(checkpoint["optimizer_state"])
+        scheduler.load_state_dict(checkpoint["scheduler_state"])
+        start_epoch = checkpoint["epoch"] + 1
+
+        logging.info(f'Model loaded from {args.load}, resume from epoch {start_epoch}')
+
+
+
 
     # -------------------------------
     # 开始训练
