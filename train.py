@@ -30,6 +30,7 @@ def train_model(
         weight_decay: float = 1e-5,
         momentum: float = 0.9,
         gradient_clipping: float = 1.0,
+        load_checkpoint: str = None,  # 添加这个参数
 ):
     # Split into train / validation
     n_val = int(len(dataset) * val_percent)
@@ -37,8 +38,7 @@ def train_model(
     train_set, val_set = random_split(dataset, [n_train, n_val], generator=torch.Generator().manual_seed(0))
 
     # Data loaders
-    loader_args = dict(batch_size=batch_size, num_workers=0, pin_memory=True)  # Windows-safe
-    # num_workers=os.cpu_count()
+    loader_args = dict(batch_size=batch_size, num_workers=0, pin_memory=True)
     train_loader = DataLoader(train_set, shuffle=True, **loader_args)
     val_loader = DataLoader(val_set, shuffle=False, drop_last=True, **loader_args)
 
@@ -68,26 +68,37 @@ def train_model(
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, 
         mode='max',
-        factor=0.5,    # 每次将学习率降低一半
-        patience=3     # 3个epoch没有改善就降低学习率
+        factor=0.5,
+        patience=3
     )
     grad_scaler = torch.cuda.amp.GradScaler(enabled=amp)
 
-    # ✅ 加入类别权重
+    # 类别权重
     weights = torch.tensor([
         0.03, 3.2, 7.6, 2.7, 4.1, 3.4, 1.3, 1.6, 0.9, 2.3,
         2.3, 1.8, 1.2, 2.3, 2.0, 0.4, 4.0, 2.8, 1.6, 1.4, 2.8
     ], dtype=torch.float32)
 
-
-    # criterion = nn.CrossEntropyLoss() if model.n_classes > 1 else nn.BCEWithLogitsLoss()
     criterion = nn.CrossEntropyLoss(weight=weights.to(device), ignore_index=255)
 
-    # criterion = nn.CrossEntropyLoss(ignore_index=255) if model.n_classes > 1 else nn.BCEWithLogitsLoss()
     global_step = 0
     best_val_score = 0
-    
-    # for epoch in range(1, epochs + 1):
+    start_epoch = 1
+
+    # 加载 checkpoint（如果指定了）
+    if load_checkpoint:
+        try:
+            checkpoint = torch.load(load_checkpoint, map_location=device)
+            model.load_state_dict(checkpoint["model_state"])
+            optimizer.load_state_dict(checkpoint["optimizer_state"])
+            scheduler.load_state_dict(checkpoint["scheduler_state"])
+            start_epoch = checkpoint["epoch"] + 1
+            logging.info(f'✅ Checkpoint loaded from {load_checkpoint}')
+            logging.info(f'   Resuming from epoch {start_epoch}')
+        except Exception as e:
+            logging.error(f'Failed to load checkpoint: {e}')
+            logging.warning('Training from scratch instead')
+
     for epoch in range(start_epoch, epochs + 1):
 
         model.train()
@@ -170,7 +181,7 @@ def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks')
     parser.add_argument('--epochs', '-e', type=int, default=10)
     parser.add_argument('--batch-size', '-b', dest='batch_size', type=int, default=1)
-    parser.add_argument('--learning-rate', '-l', dest='lr', type=float, default=1e-6)
+    parser.add_argument('--learning-rate', '-l', dest='lr', type=float, default=1e-5)
     parser.add_argument('--load', '-f', type=str, default=False)
     parser.add_argument('--scale', '-s', type=float, default=0.5)
     parser.add_argument('--validation', '-v', dest='val', type=float, default=10.0)
@@ -210,27 +221,12 @@ if __name__ == '__main__':
     model = model.to(device=device, memory_format=torch.channels_last)
     logging.info(f'Network:\n\t{model.n_channels} input channels\n\t{model.n_classes} output channels (classes)\n\t{"Bilinear" if model.bilinear else "Transposed conv"} upscaling')
 
+    # 删除这一段（旧的加载逻辑）
+    # start_epoch = 1
     # if args.load:
-    #     state_dict = torch.load(args.load, map_location=device)
-    #     # 安全地移除 mask_values（如果存在）
-    #     state_dict.pop('mask_values', None)  # 使用 pop 方法的安全移除
-    #     model.load_state_dict(state_dict)
-    #     logging.info(f'Model loaded from {args.load}')
-    start_epoch = 1  # 默认从1开始
+    #     checkpoint = torch.load(args.load, map_location=device)
+    #     ...
 
-    if args.load:
-        checkpoint = torch.load(args.load, map_location=device)
-        model.load_state_dict(checkpoint["model_state"])
-        optimizer.load_state_dict(checkpoint["optimizer_state"])
-        scheduler.load_state_dict(checkpoint["scheduler_state"])
-        start_epoch = checkpoint["epoch"] + 1
-
-        logging.info(f'Model loaded from {args.load}, resume from epoch {start_epoch}')
-
-
-
-
-    # -------------------------------
     # 开始训练
     try:
         train_model(
@@ -242,7 +238,8 @@ if __name__ == '__main__':
             learning_rate=args.lr,
             val_percent=args.val / 100,
             img_scale=args.scale,
-            amp=args.amp
+            amp=args.amp,
+            load_checkpoint=args.load  # 传递 checkpoint 路径
         )
     except torch.cuda.OutOfMemoryError:
         logging.error('Detected OutOfMemoryError! Enabling checkpointing...')
@@ -257,5 +254,6 @@ if __name__ == '__main__':
             learning_rate=args.lr,
             val_percent=args.val / 100,
             img_scale=args.scale,
-            amp=args.amp
+            amp=args.amp,
+            load_checkpoint=args.load  # 传递 checkpoint 路径
         )
