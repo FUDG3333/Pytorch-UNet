@@ -87,7 +87,9 @@ def train_model(
     global_step = 0
     best_val_score = 0
     
-    for epoch in range(1, epochs + 1):
+    # for epoch in range(1, epochs + 1):
+    for epoch in range(start_epoch, epochs + 1):
+
         model.train()
         epoch_loss = 0
         with tqdm(total=n_train, desc=f'Epoch {epoch}/{epochs}', unit='img') as pbar:
